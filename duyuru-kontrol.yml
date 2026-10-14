@@ -1,0 +1,62 @@
+name: Duyuru Kontrol
+
+on:
+  schedule:
+    # Her 30 dakikada bir (UTC). Dakika "7" ve "37": saat başındaki yoğunluğu
+    # önlemek için bilerek yuvarlak olmayan bir dakika seçildi.
+    - cron: "7,37 * * * *"
+  workflow_dispatch: # Actions sekmesinden elle başlatmak için
+
+permissions:
+  contents: write # state/seen.json dosyasını repoya geri yazmak için
+
+# Üst üste binen çalıştırmalar aynı kayıt dosyasını bozmasın
+concurrency:
+  group: duyuru-kontrol
+  cancel-in-progress: false
+
+jobs:
+  kontrol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Depoyu al
+        uses: actions/checkout@v4
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Bağımlılıkları kur
+        run: pip install -r requirements.txt
+
+      - name: Duyuruları kontrol et
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          RUN_ONCE: "1"
+          STATE_FILE: state/seen.json
+          PYTHONUNBUFFERED: "1"
+        run: python main.py
+
+      # Tarama başarısız olsa bile (if: always) o ana kadar gönderilen duyuruların
+      # kaydı saklanır; yoksa bir sonraki turda aynı duyurular tekrar gönderilirdi.
+      - name: Kayıt dosyasını repoya kaydet
+        if: always()
+        run: |
+          if [ ! -f state/seen.json ]; then
+            echo "Kayıt dosyası yok, kaydedilecek bir şey yok."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/seen.json
+          if git diff --cached --quiet; then
+            echo "Kayıtta değişiklik yok."
+            exit 0
+          fi
+          git commit -m "state: görülen duyurular güncellendi"
+          git pull --rebase
+          git push
